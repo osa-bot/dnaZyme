@@ -9,49 +9,80 @@ from utils.autoencoder import (
     encoding,
     generate_latent_representations,
     filter_sequences,
-    generate_rdkit_descriptors
+    generate_rdkit_descriptors,
 )
-from utils.constants import (
-    similar_compounds,
-    properties,
-    kmer_2_dict
-)
+from utils.constants import similar_compounds, properties, kmer_2_dict
 
 
 def flatten(lst):
+    """
+    Flattens a list of lists into a single list.
+
+        Args:
+            lst: A list containing other lists as elements.
+
+        Returns:
+            list: A new list containing all the elements from the sublists in `lst`,
+                  in the order they appear.
+    """
     return [item for sublist in lst for item in sublist]
 
 
 def extract_conditions(df_ml, buffer_column_name):
+    """
+    Extracts buffer conditions from a DataFrame column.
+
+        This method parses a string in each row of the input DataFrame that
+        represents buffer composition and extracts information about pH and
+        compound concentrations to create a new DataFrame representing these
+        conditions. It handles variations in formatting, including 'and' separators,
+        concentration units (M and %), and similar compound names.
+
+        Args:
+            df_ml: The input Pandas DataFrame containing buffer composition strings.
+            buffer_column_name: The name of the column in df_ml that contains
+                the buffer composition strings.
+
+        Returns:
+            pd.DataFrame: A DataFrame where each row represents a condition, and
+                columns represent compounds with their corresponding concentrations.
+    """
     dict_conditions = {}
     for index, row in df_ml.iterrows():
         i = row[buffer_column_name]
         if pd.isna(i):
-            i = ''
-        i = i.replace('and', ',')
-        lst = i.split(',')
+            i = ""
+        i = i.replace("and", ",")
+        lst = i.split(",")
         buffer_composition = {}
         for component in lst:
             component = component.strip()
-            if 'pH' in component:
+            if "pH" in component:
                 ph = re.search(r"\b\d[.]\d+", component).group(0)
-                buffer_composition['pH'] = ph
-            compound = ' '.join(re.findall(r"\b[a-zA-Z]{2,}\S+", component))
-            if compound == '':
+                buffer_composition["pH"] = ph
+            compound = " ".join(re.findall(r"\b[a-zA-Z]{2,}\S+", component))
+            if compound == "":
                 continue
             try:
-                concentration = re.search(r"^.*?(?=['M'])", component).group(0) + 'M'
+                concentration = re.search(r"^.*?(?=['M'])", component).group(0) + "M"
                 if len(concentration) == 1:
                     continue
                 if compound in concentration:
-                    concentration = re.search(r"^.*?(?=['M'])", component[len(compound) + 1:]).group(0) + 'M'
+                    concentration = (
+                        re.search(
+                            r"^.*?(?=['M'])", component[len(compound) + 1 :]
+                        ).group(0)
+                        + "M"
+                    )
             except AttributeError:
                 try:
                     concentration = re.search(r"\b\d*%", component).group(0)
                 except:
                     continue
             if compound in flatten(similar_compounds.values()):
-                compound = [key for key, val in similar_compounds.items() if compound in val][0]
+                compound = [
+                    key for key, val in similar_compounds.items() if compound in val
+                ][0]
 
             buffer_composition[compound] = concentration
         dict_conditions[index] = buffer_composition
@@ -60,15 +91,31 @@ def extract_conditions(df_ml, buffer_column_name):
 
 
 def convert_values(old_value):
-    converter_dict = {'M': 1, 'mM': 0.001, 'µM': 0.000001, 'nM': 0.000000001, 'μM': 0.000001}
+    """
+    Converts a value to a float, handling different units.
+
+        Args:
+            old_value: The value to convert. Can be a string with or without units,
+                or a numerical value.
+
+        Returns:
+            float: The converted value as a float.
+    """
+    converter_dict = {
+        "M": 1,
+        "mM": 0.001,
+        "µM": 0.000001,
+        "nM": 0.000000001,
+        "μM": 0.000001,
+    }
     if type(old_value) == str:
-        if '%' in old_value:
+        if "%" in old_value:
             new_value = float(re.findall(r"[+]?\d*\.?\d+|\d+", old_value)[0])
             return new_value
         else:
-            if 'M' not in old_value:
+            if "M" not in old_value:
                 return float(old_value)
-        old_value = old_value.replace('mM', ' mM')
+        old_value = old_value.replace("mM", " mM")
         number_units = old_value.split()
         new_value = float(number_units[0]) * converter_dict[number_units[1]]
         return new_value
@@ -77,31 +124,66 @@ def convert_values(old_value):
 
 
 def merge_cofactors(row):
+    """
+    Calculates the total concentration of cofactors in a row.
+
+        This method sums the values of all columns containing '+' in their name,
+        representing cofactor concentrations, after dropping any NaN values from the row.
+
+        Args:
+            row: A pandas Series representing a row of data.
+
+        Returns:
+            float: The sum of cofactor concentrations.
+    """
     row = row.dropna()
-    cof = [i for i in row.keys() if '+' in i]
+    cof = [i for i in row.keys() if "+" in i]
     concentration = row[cof].sum()
     return concentration
 
 
 def get_pymatgen_descriptors(element, charge):
+    """
+    Retrieves elemental descriptors using Pymatgen.
+
+        This method attempts to retrieve various properties of an element
+        using the Pymatgen library, given its symbol and charge. If the element
+        is invalid, it returns a dictionary with None values for all descriptors.
+
+        Args:
+            element: The elemental symbol (e.g., 'Fe').
+            charge: The ionic charge of the element.
+
+        Returns:
+            dict: A dictionary containing the elemental descriptors
+                  ('element', 'charge', 'atomic_mass', 'ionization_energy',
+                  'electron_affinity', 'ionic_radii', 'Z').  Values are floats, or None if an error occurs.
+    """
     try:
         mg.Element(element)
     except ValueError:
-        return {'element': None, 'charge': None, 'atomic_mass': None, 'ionization_energy': None,
-                'electron_affinity': None, 'ionic_radii': None, 'Z': None}
+        return {
+            "element": None,
+            "charge": None,
+            "atomic_mass": None,
+            "ionization_energy": None,
+            "electron_affinity": None,
+            "ionic_radii": None,
+            "Z": None,
+        }
     charge = float(charge)
-    descriptors_set = {'element': element, 'charge': charge}
+    descriptors_set = {"element": element, "charge": charge}
     ion = mg.Species(element, charge)
     for method in properties:
         ans = getattr(ion.element, method)
         try:
             result = ans()
-        except(TypeError, AttributeError):
+        except (TypeError, AttributeError):
             result = ans
-        if method == 'ionic_radii':
-            if element == 'Ni':
+        if method == "ionic_radii":
+            if element == "Ni":
                 result = 0.83
-            elif element == 'Cr':
+            elif element == "Cr":
                 result = 0.62
             else:
                 result = result[int(charge)]
@@ -110,17 +192,40 @@ def get_pymatgen_descriptors(element, charge):
 
 
 def calculate_ion_descriptors(row, cofactor_column_name):
+    """
+    Calculates descriptors for metal ions present in a row.
+
+        Args:
+            row: A pandas Series representing a row of data.
+            cofactor_column_name: The name of the column containing metal ion information.
+
+        Returns:
+            dict: A dictionary containing the calculated ion descriptors
+                  (element, charge, atomic mass, ionization energy, electron affinity,
+                  ionic radii, and Z). Returns a dictionary with all values set to 0 if no valid ions are found.  If multiple ions are present, returns average values for numerical descriptors and a list of elements.
+    """
     metal_ions = row[cofactor_column_name]
     lst = metal_ions.strip("[]").replace("'", "").split(",")
-    if ('metal ion dependency not reported' in metal_ions) | ('M2+-independent' in metal_ions) | (lst == ['']) | (
-            'Mg2+-independent' in metal_ions):
-        return {'element': 0, 'charge': 0, 'atomic_mass': 0, 'ionization_energy': 0, 'electron_affinity': 0,
-                'ionic_radii': 0, 'Z': 0}
+    if (
+        ("metal ion dependency not reported" in metal_ions)
+        | ("M2+-independent" in metal_ions)
+        | (lst == [""])
+        | ("Mg2+-independent" in metal_ions)
+    ):
+        return {
+            "element": 0,
+            "charge": 0,
+            "atomic_mass": 0,
+            "ionization_energy": 0,
+            "electron_affinity": 0,
+            "ionic_radii": 0,
+            "Z": 0,
+        }
     elif len(lst) == 1:
         ion = lst[0]
         element = ion[0:2]
         charge = ion[2]
-        charge = charge.replace('+', '1')
+        charge = charge.replace("+", "1")
         return get_pymatgen_descriptors(element, charge)
     else:
         ds = []
@@ -128,13 +233,13 @@ def calculate_ion_descriptors(row, cofactor_column_name):
             ions = ions.strip()
             element = ions[0:2]
             charge = ions[2]
-            charge = charge.replace('+', '1')
+            charge = charge.replace("+", "1")
             d_n = get_pymatgen_descriptors(element, charge)
             ds.append(d_n)
         d = {}
         for k in d_n.keys():
             full = list(d[k] for d in ds)
-            if k == 'element':
+            if k == "element":
                 d[k] = full
             else:
                 d[k] = sum(full) / len(full)
@@ -142,66 +247,119 @@ def calculate_ion_descriptors(row, cofactor_column_name):
 
 
 def calculate_kmer(seq, k):
+    """
+    Calculates the kmers of a given sequence.
+
+        Args:
+            seq: The input DNA sequence (string).
+            k: The length of the kmers to generate (integer).
+
+        Returns:
+            list: A list of kmer counts from the sequence.  Each element in the list
+                  represents the count of a unique kmer found in the sequence.
+    """
     dnaclass = Pydna.PyDNA(seq)
     kmer = list(dnaclass.GetKmer(k=k).values())
     return kmer
 
 
 def calculate_autoencoder(df_ml, seq_column_name):
+    """
+    Calculates latent representations of sequences using an autoencoder.
+
+        This method filters sequences, encodes them with RDKit descriptors, and
+        then generates latent representations using a pre-trained autoencoder model.
+
+        Args:
+            df_ml: The input DataFrame containing the sequences.
+            seq_column_name: The name of the column in df_ml that contains the sequences.
+
+        Returns:
+            numpy.ndarray: A NumPy array representing the latent representations
+                           of the encoded sequences.
+    """
     filtered_sequences = filter_sequences(
         sequences=df_ml,
         max_length=96,
         sequences_column_name=seq_column_name,
-        shuffle_seqs=False
+        shuffle_seqs=False,
     )
     descriptors_set = generate_rdkit_descriptors()
     encoded_sequences = encoding(
         sequences_list=filtered_sequences[seq_column_name],
-        polymer_type='DNA',
+        polymer_type="DNA",
         descriptors=descriptors_set,
-        num=96
+        num=96,
     )
     x_autoencoder = generate_latent_representations(
         encoded_sequences=encoded_sequences,
-        path_to_model_folder=r'utils/autoencoder/nucleic_acids'
+        path_to_model_folder=r"utils/autoencoder/nucleic_acids",
     )
     return x_autoencoder
 
 
-def get_full_descriptors_set(df, seq_column_name, buffer_column_name, cofactor_column_name, temperature_column_name):
+def get_full_descriptors_set(
+    df,
+    seq_column_name,
+    buffer_column_name,
+    cofactor_column_name,
+    temperature_column_name,
+):
+    """
+    Generates a full descriptor set by combining sequence-based features, conditions, and cofactor descriptors.
+
+        Args:
+            df: The input DataFrame containing the data.
+            seq_column_name: The name of the column containing sequences.
+            buffer_column_name: The name of the column containing buffer information.
+            cofactor_column_name: The name of the column containing cofactor information.
+            temperature_column_name: The name of the column containing temperature values.
+
+        Returns:
+            pd.DataFrame: A DataFrame containing the combined descriptors.
+    """
     kmer_2_features = list(kmer_2_dict.keys())
     autoencoder_features = list(generate_rdkit_descriptors().columns)
     features_names = [*kmer_2_features, *autoencoder_features]
     df_conditions = extract_conditions(df_ml=df, buffer_column_name=buffer_column_name)
     for i in df_conditions.columns:
         df_conditions.loc[:, i] = df_conditions.loc[:, i].apply(convert_values)
-    df_conditions['cofactor concentration'] = df_conditions.apply(lambda row: merge_cofactors(row), axis=1)
-    df_conditions['temperature'] = df[temperature_column_name]
+    df_conditions["cofactor concentration"] = df_conditions.apply(
+        lambda row: merge_cofactors(row), axis=1
+    )
+    df_conditions["temperature"] = df[temperature_column_name]
 
-    df_conditions = df_conditions[['pH', 'NaCl', 'KCl', 'cofactor concentration', 'temperature']].fillna(0)
+    df_conditions = df_conditions[
+        ["pH", "NaCl", "KCl", "cofactor concentration", "temperature"]
+    ].fillna(0)
     print(df_conditions.columns)
     df_cofactor = pd.DataFrame()
     df_cofactor[
         [
-            'element',
-            'charge',
-            'atomic_mass',
-            'ionization_energy',
-            'electron_affinity',
-            'ionic_radii',
-            'Z'
+            "element",
+            "charge",
+            "atomic_mass",
+            "ionization_energy",
+            "electron_affinity",
+            "ionic_radii",
+            "Z",
         ]
     ] = df.apply(
-        lambda row:calculate_ion_descriptors(row, cofactor_column_name), axis=1, result_type='expand'
-    ).fillna(0)
-    df_sequence = pd.DataFrame(np.concatenate(
-        (
-            np.array([calculate_kmer(seq, 2) for seq in df[seq_column_name]]),
-            calculate_autoencoder(df_ml=df, seq_column_name=seq_column_name)
-        ), axis=1
-    ))
+        lambda row: calculate_ion_descriptors(row, cofactor_column_name),
+        axis=1,
+        result_type="expand",
+    ).fillna(
+        0
+    )
+    df_sequence = pd.DataFrame(
+        np.concatenate(
+            (
+                np.array([calculate_kmer(seq, 2) for seq in df[seq_column_name]]),
+                calculate_autoencoder(df_ml=df, seq_column_name=seq_column_name),
+            ),
+            axis=1,
+        )
+    )
     df_sequence.columns = [*features_names]
-    df_full = pd.concat([df_sequence,
-                         df_conditions,
-                         df_cofactor], axis=1)
+    df_full = pd.concat([df_sequence, df_conditions, df_cofactor], axis=1)
     return df_full
